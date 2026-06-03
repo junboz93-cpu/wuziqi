@@ -47,6 +47,50 @@
     border: 3px solid #8b5e3c;
   }
 
+  .board-top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    padding: 0 4px;
+  }
+
+  .undo-hint {
+    font-size: 13px;
+    color: #5c3317;
+    letter-spacing: 1px;
+  }
+
+  .undo-hint strong {
+    font-size: 16px;
+    color: #c0392b;
+  }
+
+  .btn-undo-top {
+    font-family: "KaiTi", "楷体", "STKaiti", serif;
+    font-size: 13px;
+    padding: 5px 14px;
+    border: 1px solid #8b5e3c;
+    border-radius: 6px;
+    cursor: pointer;
+    letter-spacing: 2px;
+    font-weight: bold;
+    background: linear-gradient(180deg, #f5e6c8 0%, #e0cfa0 100%);
+    color: #5c3317;
+    transition: all 0.2s;
+  }
+
+  .btn-undo-top:hover:not(:disabled) {
+    background: linear-gradient(180deg, #fff0d8 0%, #e8d5a8 100%);
+    transform: translateY(-1px);
+  }
+
+  .btn-undo-top:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none;
+  }
+
   canvas {
     display: block;
     border-radius: 4px;
@@ -210,6 +254,10 @@
 
 <div class="container">
   <div class="board-wrapper">
+    <div class="board-top-bar">
+      <span class="undo-hint">可悔棋 <strong id="undoRemain">2</strong> 步</span>
+      <button class="btn btn-undo-top" id="btnUndoTop">↩ 悔棋</button>
+    </div>
     <canvas id="board" width="560" height="560"></canvas>
   </div>
 
@@ -272,6 +320,8 @@ let winner = null;
 let moveHistory = [];
 let scores = { black: 0, white: 0, draw: 0 };
 let aiThinking = false;
+let undoCount = 0;
+const MAX_UNDO = 2;
 
 // ────────── Init ──────────
 function initBoard() {
@@ -281,6 +331,8 @@ function initBoard() {
   winner = null;
   moveHistory = [];
   aiThinking = false;
+  undoCount = 0;
+  updateUndoUI();
   updateStatus();
   drawBoard();
 }
@@ -296,6 +348,14 @@ function updateStatus() {
   } else {
     st.textContent = 'AI 思考中...';
   }
+}
+
+function updateUndoUI() {
+  const remain = MAX_UNDO - undoCount;
+  document.getElementById('undoRemain').textContent = remain;
+  const disabled = gameOver || aiThinking || moveHistory.length < 2 || undoCount >= MAX_UNDO;
+  document.getElementById('btnUndo').disabled = disabled;
+  document.getElementById('btnUndoTop').disabled = disabled;
 }
 
 // ────────── Draw ──────────
@@ -560,7 +620,7 @@ function getCandidateMoves() {
     return sb - sa;
   });
 
-  return candidates.slice(0, 15);
+  return candidates.slice(0, 20);
 }
 
 function quickScore(r, c) {
@@ -620,7 +680,7 @@ function aiMove() {
   updateStatus();
   drawBoard();
 
-  // Find best move with minimax (depth 2 for medium difficulty)
+  // Find best move with minimax (depth 4 for hard difficulty)
   const candidates = getCandidateMoves();
   if (candidates.length === 0) return;
 
@@ -651,7 +711,7 @@ function aiMove() {
 
   for (const [r, c] of candidates) {
     placeStone(r, c, aiColor);
-    const score = minimax(1, -Infinity, Infinity, false);
+    const score = minimax(3, -Infinity, Infinity, false);
     undoMove();
     if (score > bestScore) {
       bestScore = score;
@@ -664,11 +724,14 @@ function aiMove() {
 
 function doAiPlace(r, c) {
   placeStone(r, c, aiColor);
+  updateStatus();
+  updateUndoUI();
   drawBoard();
 
   if (checkWin(r, c, aiColor)) {
     endGame(aiColor);
     updateStatus();
+    updateUndoUI();
     drawBoard();
     aiThinking = false;
     return;
@@ -676,6 +739,7 @@ function doAiPlace(r, c) {
   if (isBoardFull()) {
     endGame(null);
     updateStatus();
+    updateUndoUI();
     drawBoard();
     aiThinking = false;
     return;
@@ -684,6 +748,7 @@ function doAiPlace(r, c) {
   switchPlayer();
   aiThinking = false;
   updateStatus();
+  updateUndoUI();
   drawBoard();
 }
 
@@ -719,6 +784,7 @@ canvas.addEventListener('click', (e) => {
   }
 
   switchPlayer();
+  updateUndoUI();
   updateStatus();
   drawBoard();
 
@@ -768,56 +834,4 @@ canvas.addEventListener('mouseleave', () => {
 });
 
 // ────────── Buttons ──────────
-document.getElementById('btnRestart').addEventListener('click', () => {
-  initBoard();
-  if (playerColor === WHITE) {
-    // AI goes first
-    setTimeout(aiMove, 300);
-  }
-});
-
-document.getElementById('btnUndo').addEventListener('click', () => {
-  if (gameOver || aiThinking) return;
-  if (moveHistory.length < 2) return; // need to undo both player and AI move
-
-  undoMove(); // undo AI move
-  undoMove(); // undo player move
-  currentPlayer = playerColor;
-  drawBoard();
-  updateStatus();
-});
-
-document.getElementById('btnReset').addEventListener('click', () => {
-  scores = { black: 0, white: 0, draw: 0 };
-  document.getElementById('blackScore').textContent = '0';
-  document.getElementById('whiteScore').textContent = '0';
-  document.getElementById('drawScore').textContent = '0';
-  initBoard();
-  if (playerColor === WHITE) setTimeout(aiMove, 300);
-});
-
-// ────────── Color Selection ──────────
-document.getElementById('pickBlack').addEventListener('click', () => {
-  if (aiThinking) return;
-  playerColor = BLACK;
-  aiColor = WHITE;
-  document.getElementById('pickBlack').classList.add('selected');
-  document.getElementById('pickWhite').classList.remove('selected');
-  initBoard();
-});
-
-document.getElementById('pickWhite').addEventListener('click', () => {
-  if (aiThinking) return;
-  playerColor = WHITE;
-  aiColor = BLACK;
-  document.getElementById('pickWhite').classList.add('selected');
-  document.getElementById('pickBlack').classList.remove('selected');
-  initBoard();
-  setTimeout(aiMove, 300);
-});
-
-// ────────── Start ──────────
-initBoard();
-</script>
-</body>
-</html>
+document.getElementById('btnRestar
