@@ -258,7 +258,7 @@
       <span class="undo-hint">可悔棋 <strong id="undoRemain">2</strong> 步</span>
       <button class="btn btn-undo-top" id="btnUndoTop">↩ 悔棋</button>
     </div>
-    <canvas id="board" width="560" height="560"></canvas>
+    <canvas id="board" width="590" height="590"></canvas>
   </div>
 
   <div class="side-panel">
@@ -304,7 +304,12 @@
 const BOARD_SIZE = 15;
 const CELL = 36;
 const PADDING = 28;
+const LABEL_SIZE = 18; // margin for row/col labels
 const RADIUS = 15;
+const BOARD_OX = PADDING + LABEL_SIZE; // grid origin X
+const BOARD_OY = PADDING + LABEL_SIZE; // grid origin Y
+const CANVAS_W = BOARD_OX + (BOARD_SIZE - 1) * CELL + PADDING;
+const CANVAS_H = BOARD_OY + (BOARD_SIZE - 1) * CELL + PADDING;
 
 const EMPTY = 0, BLACK = 1, WHITE = 2;
 
@@ -360,33 +365,53 @@ function updateUndoUI() {
 
 // ────────── Draw ──────────
 function drawBoard() {
-  ctx.clearRect(0, 0, 560, 560);
+  ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
 
   // Board background
   ctx.fillStyle = '#e8c97a';
-  ctx.fillRect(0, 0, 560, 560);
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
   // Grain texture
   ctx.globalAlpha = 0.06;
   for (let i = 0; i < 200; i++) {
-    const x = Math.random() * 560, y = Math.random() * 560;
+    const x = Math.random() * CANVAS_W, y = Math.random() * CANVAS_H;
     ctx.fillStyle = Math.random() > 0.5 ? '#000' : '#fff';
     ctx.fillRect(x, y, Math.random() * 30 + 2, 1);
   }
   ctx.globalAlpha = 1;
 
+  // ── Row & Column labels ──
+  ctx.font = 'bold 11px "KaiTi", "楷体", "STKaiti", serif';
+  ctx.fillStyle = '#5c3317';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Column labels (A-O at top)
+  const colLabels = 'ABCDEFGHIJKLMNO';
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    const x = BOARD_OX + i * CELL;
+    ctx.fillText(colLabels[i], x, PADDING + 8);
+  }
+
+  // Row labels (1-15 on left)
+  ctx.textAlign = 'right';
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    const y = BOARD_OY + i * CELL;
+    ctx.fillText(String(i + 1), BOARD_OX - 8, y);
+  }
+
   // Grid lines
   ctx.strokeStyle = '#5c3317';
   ctx.lineWidth = 1;
   for (let i = 0; i < BOARD_SIZE; i++) {
-    const pos = PADDING + i * CELL;
+    const pos = BOARD_OY + i * CELL;
     ctx.beginPath();
-    ctx.moveTo(PADDING, pos);
-    ctx.lineTo(PADDING + (BOARD_SIZE - 1) * CELL, pos);
+    ctx.moveTo(BOARD_OX, pos);
+    ctx.lineTo(BOARD_OX + (BOARD_SIZE - 1) * CELL, pos);
     ctx.stroke();
     ctx.beginPath();
-    ctx.moveTo(pos, PADDING);
-    ctx.lineTo(pos, PADDING + (BOARD_SIZE - 1) * CELL);
+    ctx.moveTo(BOARD_OX + i * CELL, BOARD_OY);
+    ctx.lineTo(BOARD_OX + i * CELL, BOARD_OY + (BOARD_SIZE - 1) * CELL);
     ctx.stroke();
   }
 
@@ -395,7 +420,7 @@ function drawBoard() {
   for (const [r, c] of stars) {
     ctx.fillStyle = '#5c3317';
     ctx.beginPath();
-    ctx.arc(PADDING + c * CELL, PADDING + r * CELL, 3.5, 0, Math.PI * 2);
+    ctx.arc(BOARD_OX + c * CELL, BOARD_OY + r * CELL, 3.5, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -403,8 +428,8 @@ function drawBoard() {
   for (let r = 0; r < BOARD_SIZE; r++) {
     for (let c = 0; c < BOARD_SIZE; c++) {
       if (board[r][c] === EMPTY) continue;
-      const x = PADDING + c * CELL;
-      const y = PADDING + r * CELL;
+      const x = BOARD_OX + c * CELL;
+      const y = BOARD_OY + r * CELL;
 
       ctx.save();
       // Shadow
@@ -437,17 +462,12 @@ function drawBoard() {
   // Last move indicator
   if (moveHistory.length > 0) {
     const [lr, lc] = moveHistory[moveHistory.length - 1];
-    const x = PADDING + lc * CELL;
-    const y = PADDING + lr * CELL;
+    const x = BOARD_OX + lc * CELL;
+    const y = BOARD_OY + lr * CELL;
     ctx.fillStyle = board[lr][lc] === BLACK ? '#e74c3c' : '#c0392b';
     ctx.beginPath();
     ctx.arc(x, y, 4, 0, Math.PI * 2);
     ctx.fill();
-  }
-
-  // Hover indicator
-  if (!gameOver && currentPlayer === playerColor && !aiThinking) {
-    // drawn in mousemove handler
   }
 }
 
@@ -757,13 +777,13 @@ canvas.addEventListener('click', (e) => {
   if (gameOver || currentPlayer !== playerColor || aiThinking) return;
 
   const rect = canvas.getBoundingClientRect();
-  const scaleX = 560 / rect.width;
-  const scaleY = 560 / rect.height;
+  const scaleX = CANVAS_W / rect.width;
+  const scaleY = CANVAS_H / rect.height;
   const mx = (e.clientX - rect.left) * scaleX;
   const my = (e.clientY - rect.top) * scaleY;
 
-  const c = Math.round((mx - PADDING) / CELL);
-  const r = Math.round((my - PADDING) / CELL);
+  const c = Math.round((mx - BOARD_OX) / CELL);
+  const r = Math.round((my - BOARD_OY) / CELL);
 
   if (!isValidMove(r, c)) return;
 
@@ -800,38 +820,5 @@ canvas.addEventListener('mousemove', (e) => {
   }
 
   const rect = canvas.getBoundingClientRect();
-  const scaleX = 560 / rect.width;
-  const scaleY = 560 / rect.height;
-  const mx = (e.clientX - rect.left) * scaleX;
-  const my = (e.clientY - rect.top) * scaleY;
-
-  const c = Math.round((mx - PADDING) / CELL);
-  const r = Math.round((my - PADDING) / CELL);
-
-  drawBoard();
-
-  if (isValidMove(r, c)) {
-    canvas.style.cursor = 'pointer';
-    const x = PADDING + c * CELL;
-    const y = PADDING + r * CELL;
-    ctx.globalAlpha = 0.4;
-    if (playerColor === BLACK) {
-      ctx.fillStyle = '#333';
-    } else {
-      ctx.fillStyle = '#ddd';
-    }
-    ctx.beginPath();
-    ctx.arc(x, y, RADIUS, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-  } else {
-    canvas.style.cursor = 'default';
-  }
-});
-
-canvas.addEventListener('mouseleave', () => {
-  drawBoard();
-});
-
-// ────────── Buttons ──────────
-document.getElementById('btnRestar
+  const scaleX = CANVAS_W / rect.width;
+  const scaleY 
