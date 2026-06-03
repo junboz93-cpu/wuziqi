@@ -327,6 +327,8 @@ let scores = { black: 0, white: 0, draw: 0 };
 let aiThinking = false;
 let undoCount = 0;
 const MAX_UNDO = 2;
+let aiStartTime = 0;
+const AI_MAX_TIME = 8000; // 8 second cap
 
 // ────────── Init ──────────
 function initBoard() {
@@ -536,78 +538,122 @@ function switchPlayer() {
   currentPlayer = currentPlayer === BLACK ? WHITE : BLACK;
 }
 
-// ────────── AI (Minimax + Alpha-Beta) ──────────
+// ────────── AI (Alpha-Beta Minimax + Line Scan Eval) ──────────
 
-// Pattern scoring
-const SCORES = {
-  FIVE: 1000000,
-  OPEN_FOUR: 50000,
-  FOUR: 10000,
-  OPEN_THREE: 5000,
-  THREE: 1000,
-  OPEN_TWO: 500,
-  TWO: 100,
-  ONE: 10
-};
+// Directions: horizontal, vertical, diag, anti-diag
+const DIRS = [[0,1],[1,0],[1,1],[1,-1]];
 
-function evaluateDirection(r, c, dr, dc, player) {
-  let count = 0, openEnds = 0;
-  // forward
-  let i = 1;
-  while (true) {
-    const nr = r + dr * i, nc = c + dc * i;
-    if (nr >= 0 && nr < BOARD_SIZE && nc >= 0 && nc < BOARD_SIZE && board[nr][nc] === player) {
-      count++; i++;
-    } else break;
+// Pattern shape scores per 5-cell window (selfCount, opponentCount, emptyCount) → score
+function windowScore(me, op, empty, hasBlockLeft, hasBlockRight) {
+  const blocks = (hasBlockLeft ? 1 : 0) + (hasBlockRight ? 1 : 0);
+  if (me === 5) return 10000000;
+  if (op === 5) return -10000000;
+  if (me === 4) {
+    if (empty === 1 && blocks === 0) return 500000;  // open four
+    if (empty === 1 && blocks === 1) return 50000;   // four
   }
-  if (r + dr * i >= 0 && r + dr * i < BOARD_SIZE && c + dc * i >= 0 && c + dc * i < BOARD_SIZE && board[r + dr * i][c + dc * i] === EMPTY) openEnds++;
-
-  // backward
-  i = 1;
-  while (true) {
-    const nr = r - dr * i, nc = c - dc * i;
-    if (nr >= 0 && nr < BOARD_SIZE && nc >= 0 && nc < BOARD_SIZE && board[nr][nc] === player) {
-      count++; i++;
-    } else break;
+  if (op === 4) {
+    if (empty === 1 && blocks === 0) return -500000; // opponent open four
+    if (empty === 1 && blocks === 1) return -50000;
   }
-  if (r - dr * i >= 0 && r - dr * i < BOARD_SIZE && c - dc * i >= 0 && c - dc * i < BOARD_SIZE && board[r - dr * i][c - dc * i] === EMPTY) openEnds++;
-
-  if (count >= 4) return SCORES.FIVE;
-  if (count === 3) {
-    if (openEnds === 2) return SCORES.OPEN_FOUR;
-    if (openEnds === 1) return SCORES.FOUR;
+  if (me === 3) {
+    if (empty === 2 && blocks === 0) return 50000;    // open three
+    if (empty === 2 && blocks <= 1) return 2000;      // three
   }
-  if (count === 2) {
-    if (openEnds === 2) return SCORES.OPEN_THREE;
-    if (openEnds === 1) return SCORES.THREE;
+  if (op === 3) {
+    if (empty === 2 && blocks === 0) return -50000;
+    if (empty === 2 && blocks <= 1) return -2000;
   }
-  if (count === 1) {
-    if (openEnds === 2) return SCORES.OPEN_TWO;
-    if (openEnds === 1) return SCORES.TWO;
+  if (me === 2) {
+    if (empty === 3 && blocks === 0) return 500;       // open two
+    if (empty === 3 && blocks <= 1) return 100;        // two
   }
-  if (count === 0 && openEnds > 0) return SCORES.ONE;
+  if (op === 2) {
+    if (empty === 3 && blocks === 0) return -500;
+    if (empty === 3 && blocks <= 1) return -100;
+  }
+  if (me === 1) {
+    if (empty === 4 && blocks === 0) return 30;        // open one
+  }
+  if (op === 1) {
+    if (empty === 4 && blocks === 0) return -30;
+  }
   return 0;
 }
 
-function evaluatePosition(r, c, player) {
-  const directions = [[0,1],[1,0],[1,1],[1,-1]];
-  let total = 0;
-  for (const [dr, dc] of directions) {
-    total += evaluateDirection(r, c, dr, dc, player);
-  }
-  return total;
-}
-
-function evaluateBoard(player) {
-  const opponent = player === BLACK ? WHITE : BLACK;
+// Fast full-board evaluation by sliding 5-cell window
+function evaluateBoardFast(aiPlayer) {
   let score = 0;
+  const opponent = aiPlayer === BLACK ? WHITE : BLACK;
 
+  // Horizontal
   for (let r = 0; r < BOARD_SIZE; r++) {
-    for (let c = 0; c < BOARD_SIZE; c++) {
-      if (board[r][c] === player) score += evaluatePosition(r, c, player);
-      else if (board[r][c] === opponent) score -= evaluatePosition(r, c, opponent);
+    for (let c = 0; c <= BOARD_SIZE - 5; c++) {
+      let me = 0, op = 0, empty = 0;
+      for (let k = 0; k < 5; k++) {
+        const v = board[r][c + k];
+        if (v === aiPlayer) me++;
+        else if (v === opponent) op++;
+        else empty++;
+      }
+      if (me > 0 && op > 0) continue; // mixed window, dead
+      const leftBlock = (c > 0 && board[r][c - 1] !== EMPTY && board[r][c - 1] !== (me > 0 ? aiPlayer : opponent));
+      const rightBlock = (c + 5 < BOARD_SIZE && board[r][c + 5] !== EMPTY && board[r][c + 5] !== (me > 0 ? aiPlayer : opponent));
+      score += windowScore(me, op, empty, leftBlock, rightBlock);
     }
   }
+
+  // Vertical
+  for (let c = 0; c < BOARD_SIZE; c++) {
+    for (let r = 0; r <= BOARD_SIZE - 5; r++) {
+      let me = 0, op = 0, empty = 0;
+      for (let k = 0; k < 5; k++) {
+        const v = board[r + k][c];
+        if (v === aiPlayer) me++;
+        else if (v === opponent) op++;
+        else empty++;
+      }
+      if (me > 0 && op > 0) continue;
+      const leftBlock = (r > 0 && board[r - 1][c] !== EMPTY && board[r - 1][c] !== (me > 0 ? aiPlayer : opponent));
+      const rightBlock = (r + 5 < BOARD_SIZE && board[r + 5][c] !== EMPTY && board[r + 5][c] !== (me > 0 ? aiPlayer : opponent));
+      score += windowScore(me, op, empty, leftBlock, rightBlock);
+    }
+  }
+
+  // Diagonal (top-left to bottom-right)
+  for (let r = 0; r <= BOARD_SIZE - 5; r++) {
+    for (let c = 0; c <= BOARD_SIZE - 5; c++) {
+      let me = 0, op = 0, empty = 0;
+      for (let k = 0; k < 5; k++) {
+        const v = board[r + k][c + k];
+        if (v === aiPlayer) me++;
+        else if (v === opponent) op++;
+        else empty++;
+      }
+      if (me > 0 && op > 0) continue;
+      const leftBlock = (r > 0 && c > 0 && board[r - 1][c - 1] !== EMPTY && board[r - 1][c - 1] !== (me > 0 ? aiPlayer : opponent));
+      const rightBlock = (r + 5 < BOARD_SIZE && c + 5 < BOARD_SIZE && board[r + 5][c + 5] !== EMPTY && board[r + 5][c + 5] !== (me > 0 ? aiPlayer : opponent));
+      score += windowScore(me, op, empty, leftBlock, rightBlock);
+    }
+  }
+
+  // Anti-diagonal (top-right to bottom-left)
+  for (let r = 0; r <= BOARD_SIZE - 5; r++) {
+    for (let c = 4; c < BOARD_SIZE; c++) {
+      let me = 0, op = 0, empty = 0;
+      for (let k = 0; k < 5; k++) {
+        const v = board[r + k][c - k];
+        if (v === aiPlayer) me++;
+        else if (v === opponent) op++;
+        else empty++;
+      }
+      if (me > 0 && op > 0) continue;
+      const leftBlock = (r > 0 && c < BOARD_SIZE - 1 && board[r - 1][c + 1] !== EMPTY && board[r - 1][c + 1] !== (me > 0 ? aiPlayer : opponent));
+      const rightBlock = (r + 5 < BOARD_SIZE && c - 5 >= 0 && board[r + 5][c - 5] !== EMPTY && board[r + 5][c - 5] !== (me > 0 ? aiPlayer : opponent));
+      score += windowScore(me, op, empty, leftBlock, rightBlock);
+    }
+  }
+
   return score;
 }
 
@@ -631,6 +677,10 @@ function getCandidateMoves() {
   if (candidates.length === 0) {
     const mid = Math.floor(BOARD_SIZE / 2);
     candidates.push([mid, mid]);
+    candidates.push([mid - 1, mid - 1]);
+    candidates.push([mid + 1, mid + 1]);
+    candidates.push([mid, mid - 1]);
+    candidates.push([mid, mid + 1]);
   }
 
   // Sort by immediate pattern score for better pruning
@@ -640,31 +690,31 @@ function getCandidateMoves() {
     return sb - sa;
   });
 
-  return candidates.slice(0, 20);
+  return candidates.slice(0, 25);
 }
 
 function quickScore(r, c) {
   board[r][c] = aiColor;
-  const attack = evaluatePosition(r, c, aiColor);
-  board[r][c] = playerColor;
-  const defense = evaluatePosition(r, c, playerColor);
+  const sa = evaluateBoardFast(aiColor);
   board[r][c] = EMPTY;
-  return Math.max(attack, defense * 0.9);
+  board[r][c] = playerColor;
+  const sb = evaluateBoardFast(aiColor);
+  board[r][c] = EMPTY;
+  return sa + sb * 0.5; // defensive consideration built in
 }
 
-function minimax(depth, alpha, beta, isMaximizing) {
-  // Terminal checks
-  if (moveHistory.length > 0) {
-    const [lr, lc] = moveHistory[moveHistory.length - 1];
-    const lastPlayer = board[lr][lc];
-    if (checkWin(lr, lc, lastPlayer)) {
-      return lastPlayer === aiColor ? 1000000 + depth : -(1000000 + depth);
-    }
+function minimax(depth, alpha, beta, isMaximizing, lastR, lastC) {
+  // Check if last placed stone won
+  if (lastR !== undefined && lastC !== undefined && checkWin(lastR, lastC, board[lastR][lastC])) {
+    return board[lastR][lastC] === aiColor ? 100000000 + depth : -(100000000 + depth);
   }
   if (isBoardFull()) return 0;
-  if (depth === 0) return evaluateBoard(aiColor);
+  if (depth === 0) return evaluateBoardFast(aiColor);
 
-  const candidates = getCandidateMoves();
+  let candidates = getCandidateMoves();
+  // At deeper levels, use fewer candidates for speed
+  if (depth <= 3) candidates = candidates.slice(0, 10);
+  if (depth <= 2) candidates = candidates.slice(0, 8);
 
   if (candidates.length === 0) return 0;
 
@@ -672,10 +722,10 @@ function minimax(depth, alpha, beta, isMaximizing) {
     let maxEval = -Infinity;
     for (const [r, c] of candidates) {
       placeStone(r, c, aiColor);
-      const evalScore = minimax(depth - 1, alpha, beta, false);
+      const evalScore = minimax(depth - 1, alpha, beta, false, r, c);
       undoMove();
-      maxEval = Math.max(maxEval, evalScore);
-      alpha = Math.max(alpha, evalScore);
+      if (evalScore > maxEval) maxEval = evalScore;
+      if (maxEval > alpha) alpha = maxEval;
       if (beta <= alpha) break;
     }
     return maxEval;
@@ -683,142 +733,7 @@ function minimax(depth, alpha, beta, isMaximizing) {
     let minEval = Infinity;
     for (const [r, c] of candidates) {
       placeStone(r, c, playerColor);
-      const evalScore = minimax(depth - 1, alpha, beta, true);
+      const evalScore = minimax(depth - 1, alpha, beta, true, r, c);
       undoMove();
-      minEval = Math.min(minEval, evalScore);
-      beta = Math.min(beta, evalScore);
-      if (beta <= alpha) break;
-    }
-    return minEval;
-  }
-}
-
-function aiMove() {
-  if (gameOver || currentPlayer !== aiColor) return;
-
-  aiThinking = true;
-  updateStatus();
-  drawBoard();
-
-  // Find best move with minimax (depth 4 for hard difficulty)
-  const candidates = getCandidateMoves();
-  if (candidates.length === 0) return;
-
-  // Check for immediate winning move
-  for (const [r, c] of candidates) {
-    placeStone(r, c, aiColor);
-    if (checkWin(r, c, aiColor)) {
-      undoMove();
-      doAiPlace(r, c);
-      return;
-    }
-    undoMove();
-  }
-
-  // Check for blocking opponent's winning move
-  for (const [r, c] of candidates) {
-    placeStone(r, c, playerColor);
-    if (checkWin(r, c, playerColor)) {
-      undoMove();
-      doAiPlace(r, c);
-      return;
-    }
-    undoMove();
-  }
-
-  let bestScore = -Infinity;
-  let bestMove = candidates[0];
-
-  for (const [r, c] of candidates) {
-    placeStone(r, c, aiColor);
-    const score = minimax(3, -Infinity, Infinity, false);
-    undoMove();
-    if (score > bestScore) {
-      bestScore = score;
-      bestMove = [r, c];
-    }
-  }
-
-  doAiPlace(bestMove[0], bestMove[1]);
-}
-
-function doAiPlace(r, c) {
-  placeStone(r, c, aiColor);
-  updateStatus();
-  updateUndoUI();
-  drawBoard();
-
-  if (checkWin(r, c, aiColor)) {
-    endGame(aiColor);
-    updateStatus();
-    updateUndoUI();
-    drawBoard();
-    aiThinking = false;
-    return;
-  }
-  if (isBoardFull()) {
-    endGame(null);
-    updateStatus();
-    updateUndoUI();
-    drawBoard();
-    aiThinking = false;
-    return;
-  }
-
-  switchPlayer();
-  aiThinking = false;
-  updateStatus();
-  updateUndoUI();
-  drawBoard();
-}
-
-// ────────── Event Handlers ──────────
-canvas.addEventListener('click', (e) => {
-  if (gameOver || currentPlayer !== playerColor || aiThinking) return;
-
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = CANVAS_W / rect.width;
-  const scaleY = CANVAS_H / rect.height;
-  const mx = (e.clientX - rect.left) * scaleX;
-  const my = (e.clientY - rect.top) * scaleY;
-
-  const c = Math.round((mx - BOARD_OX) / CELL);
-  const r = Math.round((my - BOARD_OY) / CELL);
-
-  if (!isValidMove(r, c)) return;
-
-  placeStone(r, c, playerColor);
-  drawBoard();
-
-  if (checkWin(r, c, playerColor)) {
-    endGame(playerColor);
-    updateStatus();
-    drawBoard();
-    return;
-  }
-  if (isBoardFull()) {
-    endGame(null);
-    updateStatus();
-    drawBoard();
-    return;
-  }
-
-  switchPlayer();
-  updateUndoUI();
-  updateStatus();
-  drawBoard();
-
-  // AI turn
-  setTimeout(aiMove, 200);
-});
-
-canvas.addEventListener('mousemove', (e) => {
-  if (gameOver || currentPlayer !== playerColor || aiThinking) {
-    canvas.style.cursor = 'default';
-    drawBoard();
-    return;
-  }
-
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = CANVAS_W / rect.width;
-  const scaleY 
+      if (evalScore < minEval) minEval = evalScore;
+      if (minEval < beta) beta = minEval;
